@@ -260,3 +260,45 @@ body.hero .band-range { font-size: 16px; color: #cfd8e5; }
 body.hero td.band { width: 300px; }
 body.hero .model .eq, body.hero .model .eq b { font-size: 21px; }
 body.hero .kpis dt { color: #7f8fa3; }
+
+/* ---------- the fit, as a picture ---------- */
+
+.scatter {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 12px 14px 6px; margin-bottom: 18px;
+}
+.scatter-head { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 4px; }
+.scatter-head h2 {
+  margin: 0; font-size: 11px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--faint);
+}
+.scatter-head p { margin: 0; font-size: 12px; color: var(--dim); }
+.scatter svg { display: block; width: 100%; height: auto; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+.dot.peer { background: rgba(56,189,248,0.55); }
+.dot.board { background: none; border: 1.7px solid var(--accent); }
+
+body.hero .scatter { margin-bottom: 16px; }
+body.hero .scatter-head h2 { font-size: 13px; }
+body.hero .scatter-head p { font-size: 14px; }
+
+/* the cover must fit one 1440x900 frame: the chart is capped, the strip tightened */
+body.hero .scatter svg { height: auto; width: 100%; }
+body.hero .scatter { padding: 10px 12px 4px; margin-bottom: 14px; }
+body.hero .masthead { padding-bottom: 14px; margin-bottom: 16px; }
+body.hero .model { margin-bottom: 14px; }
+body.hero .kpis dd { font-size: 26px; }
+body.hero .board td { padding: 9px 10px; }
+body.hero .board { font-size: 17px; }
+
+/* tighter hero so the cover fits one 1440x900 frame */
+body.hero #rows { font-size: 14px; }
+body.hero .board td, body.hero .board th { padding: 6px 8px; }
+body.hero .masthead { padding-bottom: 8px; margin-bottom: 8px; }
+body.hero .brand h1 { font-size: 40px; letter-spacing: -1.2px; }
+body.hero .tagline { font-size: 15px; }
+body.hero .kpis dd { font-size: 22px; }
+body.hero .model { margin-bottom: 8px; }
+body.hero .model .eq { font-size: 12px; }
+body.hero .model .cell dd { font-size: 13px; }
+body.hero .scatter svg { height: auto; width: 100%; }
+body.hero .scatter { padding: 4px 8px 2px; margin-bottom: 10px; }

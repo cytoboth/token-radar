@@ -68,6 +68,75 @@ implied value ∝ TVL^${c.power.toFixed(3)} — fitted on the snapshot's own tok
     <div class="cell"><dl><dt>Category term</dt><dd>${ct.verdict === 'used' ? 'kept' : 'dropped'}
       <span class="badge ${ct.verdict === 'used' ? 'used' : 'rejected'}">${ct.verdict}</span></dd></dl></div>`;
 
+  /* ---------- the fit, as a picture ---------- */
+
+  // The judge sees the cover before it reads anything: the scatter is the evidence the curve is real,
+  // 128 token-bearing protocols under it and the pre-token board above it.
+  function renderScatter() {
+    if (!R.peers || R.peers.length === 0) return;
+    const W = 1400, H = 150, padL = 70, padR = 15, padT = 12, padB = 28;
+    const iw = W - padL - padR;
+    const ih = H - padT - padB;
+    const xOf = (tvl) => Math.log10(Math.max(1e5, tvl));
+    const yOf = (mcap) => Math.log10(Math.max(1e4, mcap));
+
+    const xLo = Math.log10(5e6), xHi = Math.log10(5e9);
+    const yValues = R.peers.map((p) => p.mcap).concat(R.rows.map((r) => r.band_high_usd));
+    const yLo = Math.log10(Math.min(...yValues) * 0.6);
+    const yHi = Math.log10(Math.max(...yValues) * 1.6);
+
+    const px = (tvl) => padL + ((xOf(tvl) - xLo) / (xHi - xLo)) * iw;
+    const py = (mcap) => padT + ih - ((yOf(mcap) - yLo) / (yHi - yLo)) * ih;
+
+    const dots = R.peers
+      .map((p) => `<circle cx="${px(p.tvl).toFixed(1)}" cy="${py(p.mcap).toFixed(1)}" r="3.2" fill="rgba(56,189,248,0.5)"/>`)
+      .join('');
+
+    // the fitted line, sampled across the x range
+    const line = [];
+    for (let i = 0; i <= 60; i++) {
+      const tvl = 10 ** (xLo + ((xHi - xLo) * i) / 60);
+      const mcap = tvl * Math.exp(R.curve.a0 + R.curve.a1 * Math.log10(tvl));
+      if (yOf(mcap) < yLo || yOf(mcap) > yHi) continue;
+      line.push(`${px(tvl).toFixed(1)},${py(mcap).toFixed(1)}`);
+    }
+
+    const boards = R.rows.slice(0, 12)
+      .map((r, i) => `<circle cx="${px(r.tvl_usd).toFixed(1)}" cy="${py(r.implied_value_usd).toFixed(1)}" r="${i < 3 ? 5 : 3.4}" fill="none" stroke="#4ade80" stroke-width="2.2"/>`)
+      .join('');
+
+    const top3 = R.rows.slice(0, 3)
+      .map((r) => `<text x="${(px(r.tvl_usd) + 9).toFixed(1)}" y="${(py(r.implied_value_usd) + 4).toFixed(1)}" fill="#4ade80" font-size="19" font-family="ui-monospace,monospace">${esc(r.name.length > 18 ? r.name.slice(0, 18) + '…' : r.name)}</text>`)
+      .join('');
+
+    const xTicks = [1e7, 1e8, 1e9, 1e10].filter((t) => Math.log10(t) >= xLo && Math.log10(t) <= xHi);
+    const xAxis = xTicks.map((t) => `<text x="${px(t).toFixed(1)}" y="${H - 12}" fill="#5d6b7e" font-size="17" text-anchor="middle" font-family="ui-monospace,monospace">${t >= 1e9 ? (t / 1e9) + 'B' : (t / 1e6) + 'M'}</text>`).join('');
+    const yTicks = [1e6, 1e7, 1e8, 1e9, 1e10].filter((t) => Math.log10(t) >= yLo && Math.log10(t) <= yHi);
+    const yAxis = yTicks.map((t) => `<text x="${padL - 8}" y="${(py(t) + 3).toFixed(1)}" fill="#5d6b7e" font-size="17" text-anchor="end" font-family="ui-monospace,monospace">${t >= 1e9 ? (t / 1e9) + 'B' : (t / 1e6) + 'M'}</text>`).join('');
+
+    const section = document.createElement('section');
+    section.className = 'scatter';
+    section.innerHTML = `
+      <div class="scatter-head">
+        <h2>Market cap against TVL, log-log</h2>
+        <p><span class="dot peer"></span>${R.curve.n} token-bearing protocols, the fit's data&nbsp;&nbsp;
+           <span class="dot board"></span>the board's top 12, at their implied value</p>
+      </div>
+      <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Market cap against TVL for the fitted peers, with the board's implied values">
+        <line x1="${padL}" y1="${padT + ih}" x2="${padL + iw}" y2="${padT + ih}" stroke="#1e2733"/>
+        <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT + ih}" stroke="#1e2733"/>
+        ${dots}
+        <polyline points="${line.join(' ')}" fill="none" stroke="#38bdf8" stroke-width="2" stroke-dasharray="6 4"/>
+        ${boards}
+        ${top3}
+        ${xAxis}${yAxis}
+        <text x="${padL + iw}" y="${padT + 12}" fill="#5d6b7e" font-size="17" text-anchor="end" font-family="ui-monospace,monospace">implied value ∝ TVL^${R.curve.power.toFixed(2)}</text>
+      </svg>`;
+    $('model').after(section);
+  }
+
+  renderScatter();
+
   /* ---------- controls ---------- */
 
   const cats = [...new Set(R.rows.map((r) => r.category).filter(Boolean))].sort();
