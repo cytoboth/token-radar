@@ -3,12 +3,100 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Radar: pre-token protocols ranked by implied value</title>
+<title>Token Radar — pre-token protocols ranked by implied value</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
 <a class="skip" href="#board">Skip to the board</a>
-<main id="board" tabindex="-1" aria-busy="true"></main>
+
+<header class="masthead">
+  <div class="brand">
+    <h1>Token Radar</h1>
+    <p class="tagline">Which protocol without a token would be worth the most if it launched</p>
+  </div>
+  <dl class="kpis" id="kpis"></dl>
+</header>
+
+<section class="model" id="model" aria-label="The model"></section>
+
+<section class="controls" aria-label="Filters">
+  <label class="field">
+    <span>Search</span>
+    <input id="q" type="search" placeholder="name, symbol, slug" autocomplete="off">
+  </label>
+  <label class="field">
+    <span>Category</span>
+    <select id="category"><option value="">All categories</option></select>
+  </label>
+  <label class="field">
+    <span>Chain</span>
+    <select id="chain"><option value="">All chains</option></select>
+  </label>
+  <label class="field">
+    <span>Min launch odds</span>
+    <select id="odds">
+      <option value="0">Any</option>
+      <option value="0.25">25% +</option>
+      <option value="0.4">40% +</option>
+      <option value="0.6">60% +</option>
+    </select>
+  </label>
+  <label class="field">
+    <span>Sort</span>
+    <select id="sort">
+      <option value="rank">Implied value</option>
+      <option value="odds">Launch odds</option>
+      <option value="tvl">TVL</option>
+      <option value="growth">7d growth</option>
+      <option value="age">Age</option>
+    </select>
+  </label>
+  <p class="count" id="count"></p>
+</section>
+
+<main id="board" tabindex="-1">
+  <table class="board">
+    <thead>
+      <tr>
+        <th class="num">#</th>
+        <th>Protocol</th>
+        <th class="num">TVL</th>
+        <th class="num">7d</th>
+        <th class="num">Age</th>
+        <th class="num">Implied value</th>
+        <th class="band">Interquartile band</th>
+        <th class="num">Launch odds</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <p class="empty" id="empty" hidden>No protocol matches these filters.</p>
+</main>
+
+<aside class="drawer" id="drawer" hidden aria-live="polite"></aside>
+
+<footer class="notes">
+  <section>
+    <h2>Where the numbers come from</h2>
+    <p id="provenance"></p>
+    <p>Every figure on this page is computed from that snapshot alone. No external call, no cached list, no
+      hand-set multiple per protocol: one fit, applied to every row.</p>
+  </section>
+  <section>
+    <h2>Launch odds</h2>
+    <p>The share of protocols of the same age that already record a token, counted in the snapshot and
+      smoothed by one to two so thin buckets cannot claim certainty. It is a cross-sectional rate, not a
+      forecast, and it is shown beside the value rather than folded into it.</p>
+    <table class="mini" id="odds-table"></table>
+  </section>
+  <section>
+    <h2>What was tested and rejected</h2>
+    <p>The value curve was fitted with and without a per-category term and scored on held-out halves. The
+      category term is only applied when it wins; the folds are printed below so the decision can be checked.</p>
+    <table class="mini" id="folds"></table>
+  </section>
+</footer>
+
 <script src="../data.js"></script>
 <script src="app.js"></script>
 </body>

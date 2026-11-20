@@ -8,7 +8,8 @@
 //
 // Implied value follows only from the snapshot's own figures:
 //
-//   base       = tvl_usd x BASE_MULTIPLE
+//   curve      = least squares of ln(mcap/tvl) on log10(tvl) over every token-bearing protocol,
+//                giving ln(ratio) = a0 + a1 log10(tvl), so base = tvl x exp(a0) x tvl^(a1/ln10)
 //   growth     = clamp(change_7d, -60, 120) per cent
 //   growthMult = 1 + (growth / 100) x GROWTH_WEIGHT
 //   maturity   = 0.6 + min(age_days, 1095) / 1095 x 0.4   (age_days unknown: 365)
@@ -16,6 +17,12 @@
 //
 // The constants are the house model's, stated in the dashboard and changeable in the model sandbox. No
 // protocol name is ever special-cased: the same function scores every row.
+
+import {
+  band, categoryContext, curveValue, fitCurve, fitOdds, peersOf, sizeContext, testCategory,
+  type CategoryContext, type CategoryTest, type Curve, type OddsModel, type SizeContext,
+} from './valuation.ts';
+
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -41,6 +48,19 @@ export interface Snapshot {
 }
 
 /** The model's constants, as the dashboard states them and the sandbox may change them. */
+/**
+ * The board's value model.
+ *
+ * The curve is fitted at run time from the snapshot's own token-bearing protocols:
+ *   ln(mcap / TVL) = a0 + a1 * log10(TVL)
+ * so a protocol's implied value is TVL^(1 + a1/ln10) times the growth and maturity terms, and the
+ * dollar level reflects what the market actually pays for that size. A flat multiple of TVL is not
+ * used: at this snapshot's peers it overvalues the largest protocols about sevenfold and
+ * undervalues the smallest about twofold.
+ *
+ * A category multiplier was tested out of sample (two folds) and is only applied when it beats the
+ * size-only fit; the result travels in the dossier and on the page.
+ */
 export interface ModelConstants {
   base_multiple: number;
   growth_weight: number;
@@ -103,9 +123,17 @@ export interface BoardRow {
     age_days: number | null;
   };
   farm_steps: string[];
+  /** the share of same-age protocols that already record a token: a cross-sectional prior */
+  launch_odds: number;
+  /** the fitted value's interquartile band, same curve, residual quantiles applied */
+  band_low_usd: number;
+  band_high_usd: number;
+  /** token-bearing peers in this protocol's category, and their median mcap/TVL */
+  peers_in_category: number;
+  category_median_ratio: number | null;
 }
 
-/** The dashboard's compact view of one row, with farm plans generated in the page. */
+/** The dashboard's compact view of one row; the farm plan travels with it so the page adds no logic. */
 export interface RadarRow {
   rank: number;
   slug: string;
@@ -120,6 +148,12 @@ export interface RadarRow {
   implied_value_usd: number;
   growth_multiplier: number;
   maturity_multiplier: number;
+  launch_odds: number;
+  band_low_usd: number;
+  band_high_usd: number;
+  farm_steps: string[];
+  peers_in_category: number;
+  category_median_ratio: number | null;
 }
 
 /** A live-token protocol: it already trades, so the board shows the market's own value, not a model's. */
@@ -144,6 +178,12 @@ export interface RadarData {
   board_size: number;
   early_size: number;
   live_size: number;
+  /** the fitted curve, so the page can state it and draw its bands */
+  curve: { a0: number; a1: number; n: number; r2: number; power: number; q25: number; q75: number };
+  /** the launch-odds table the board's prior comes from */
+  odds: { label: string; lo: number; hi: number | null; tokenized: number; n: number; share: number }[];
+  /** the category term's held-out test: kept only when it beats the size-only fit */
+  category_test: CategoryTest;
   rows: RadarRow[];
   live: LiveRow[];
 }
@@ -173,14 +213,14 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
 }
 
 /** The three multipliers and the implied value one protocol gets under `model`. */
-export function impliedValue(protocol: SnapshotProtocol, asOf: string, model: ModelConstants): { implied: number; growthPct: number; growthMult: number; maturityMult: number; age: number | null } {
+export function impliedValue(protocol: SnapshotProtocol, asOf: string, model: ModelConstants, curve?: Curve): { implied: number; growthPct: number; growthMult: number; maturityMult: number; age: number | null } {
   const age = ageDays(asOf, protocol.listed_at);
   const rawGrowth = finite(protocol.change_7d, 0);
   const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
   const growthMult = 1 + (growthPct / 100) * model.growth_weight;
   const ageForModel = age ?? model.unknown_age_days;
   const maturityMult = model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
-  const base = protocol.tvl_usd * model.base_multiple;
+  const base = curve === undefined ? protocol.tvl_usd * model.base_multiple : curveValue(protocol.tvl_usd, curve);
   const implied = Math.max(1, Math.round(base * growthMult * maturityMult));
   return { implied, growthPct, growthMult, maturityMult, age };
 }
@@ -211,9 +251,29 @@ export interface BoardSummary {
   live_size: number;
 }
 
+/** The fitted terms a board shares: the curve, the peers behind it, the odds table, the category verdict. */
+export interface ModelContext {
+  curve: Curve;
+  peers: ReturnType<typeof peersOf>;
+  odds: OddsModel;
+  categoryTest: CategoryTest;
+}
+
+/** Fit every shared term once, so the board and the page agree on them. */
+export function modelContext(snapshot: Snapshot): ModelContext {
+  const peers = peersOf(snapshot.protocols);
+  return {
+    curve: fitCurve(peers),
+    peers,
+    odds: fitOdds(snapshot.protocols, snapshot.as_of),
+    categoryTest: testCategory(peers),
+  };
+}
+
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
-export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
+export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, ctx?: ModelContext): BoardRow[] {
   const index = bySlug(snapshot.protocols);
+  const context = ctx ?? modelContext(snapshot);
   const chosen = new Map<string, SnapshotProtocol>();
   // The watchlist is the floor: every slug, even one the snapshot no longer carries (it cannot, but the
   // board's coverage is the gate's row and is never gambled on a missing record).
@@ -230,8 +290,11 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
   for (const p of early) chosen.set(p.slug, p);
 
   const scored = [...chosen.values()].map((p) => {
-    const { implied, growthPct, growthMult, maturityMult, age } = impliedValue(p, snapshot.as_of, model);
-    return { p, implied, growthPct, growthMult, maturityMult, age };
+    const { implied, growthPct, growthMult, maturityMult, age } = impliedValue(p, snapshot.as_of, model, context.curve);
+    const b = band(implied, context.curve);
+    const cat: CategoryContext = categoryContext(p, context.peers);
+    const size: SizeContext = sizeContext(p.tvl_usd, context.peers);
+    return { p, implied, growthPct, growthMult, maturityMult, age, band: b, cat, size, odds: context.odds.at(age) };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   return scored.map((s, i) => ({
@@ -256,7 +319,22 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       maturity_multiplier: round4(s.maturityMult),
       age_days: s.age,
     },
-    farm_steps: farmSteps(s.p, s.age).map(stepText),
+    farm_steps: farmSteps(s.p, s.age, {
+      low: s.band.low,
+      high: s.band.high,
+      implied: s.implied,
+      odds: s.odds,
+      peers: s.cat.n,
+      medianRatio: s.cat.median_ratio,
+      sizeLabel: s.size.label,
+      sizePeers: s.size.n,
+      sizeMedianRatio: s.size.median_ratio,
+    }).map(stepText),
+    launch_odds: Math.round(s.odds * 1000) / 1000,
+    band_low_usd: s.band.low,
+    band_high_usd: s.band.high,
+    peers_in_category: s.cat.n,
+    category_median_ratio: s.cat.median_ratio === null ? null : round4(s.cat.median_ratio),
   }));
 }
 
@@ -312,43 +390,93 @@ function actionFor(p: SnapshotProtocol, capital: number, chain: string): string 
  * A protocol's farm plan: six steps, each an action with a cost and a time. The plan is derived from
  * the protocol's own record (category, chains, TVL, age), never from a hand-written list of names.
  */
-export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
+export function farmSteps(
+  p: SnapshotProtocol,
+  age: number | null,
+  ctx: {
+    low: number; high: number; implied: number; odds: number; peers: number; medianRatio: number | null;
+    sizeLabel: string; sizePeers: number; sizeMedianRatio: number | null;
+  },
+): FarmStep[] {
   const chain = chainOf(p);
-  const capital = capitalFor(p);
+  const capital = sizeFor(ctx.odds, p);
   const hold = holdDaysFor(age);
   const action = actionFor(p, capital, chain);
-  return [
+  const perTvl = ctx.implied / Math.max(1, p.tvl_usd);
+  const steps: FarmStep[] = [
     {
-      text: `Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.`,
-      cost: 'under $3 of gas for the first transaction',
-      time: '5 minutes',
-    },
-    {
-      text: action,
-      cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`,
+      text: `${action} Size it at $${capital}: ${(ctx.odds * 100).toFixed(0)}% of ${age === null ? 'protocols this age' : `protocols ${holdBucket(age)}`} record a token, so budget for no airdrop at all.`,
+      cost: `$${capital} of capital, about $${capital >= 150 ? 8 : 4} in gas`,
       time: '15 minutes to set up',
     },
-    {
-      text: `Make one qualifying action each week, such as a deposit, a borrow, a swap or a vote.`,
-      cost: 'about $2 of gas a week',
-      time: '10 minutes a week',
-    },
-    {
-      text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`,
-      cost: `the $${capital} stays in the position`,
-      time: `${hold} days`,
-    },
-    {
-      text: `Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes.`,
-      cost: 'no fee to check, and never pay to claim',
-      time: '10 minutes',
-    },
-    {
-      text: `Write the wallet, the dates and every transaction in a farm log so you can repeat the position or unwind it.`,
-      cost: 'nothing but the log',
-      time: '5 minutes',
-    },
   ];
+
+  if (p.chains.length > 1) {
+    steps.push({
+      text: `Keep the position on ${chain}, where the protocol is listed first; its other chains are ${p.chains.slice(1, 4).join(', ')}. Bridging in and out costs a fee each way, so do not spread $${capital} across several.`,
+      cost: `one bridge fee each way if you use another chain`,
+      time: '20 minutes once',
+    });
+  } else {
+    steps.push({
+      text: `${p.name} is listed on ${chain} alone, so there is no bridge and no second venue to split the position across.`,
+      cost: 'no bridge fee',
+      time: 'none',
+    });
+  }
+
+  if (ctx.medianRatio !== null && ctx.peers >= 3) {
+    const peerValue = Math.round(p.tvl_usd * ctx.medianRatio);
+    steps.push({
+      text: `Benchmark the payout against its own category: ${ctx.peers} token-bearing peers trade at a median ${ctx.medianRatio.toFixed(3)}x TVL, which would value ${p.name} at $${Math.round(peerValue / 1e6)}M against the model's $${Math.round(ctx.implied / 1e6)}M (${(perTvl * 100).toFixed(1)}% of TVL). A launch at the peer median is the upside case, not the base case.`,
+      cost: 'nothing, this is the pricing check before you commit capital',
+      time: '5 minutes',
+    });
+  } else {
+    const bandMedian = ctx.sizeMedianRatio;
+    steps.push({
+      text: bandMedian === null
+        ? `No token-bearing peer in its category to benchmark against, so the band is the only guide: $${Math.round(ctx.low / 1e6)}M to $${Math.round(ctx.high / 1e6)}M around a $${Math.round(ctx.implied / 1e6)}M point estimate.`
+        : `Its category has no token-bearing peer, so price it against size: ${ctx.sizePeers} protocols in the ${ctx.sizeLabel} band trade at a median ${bandMedian.toFixed(3)}x TVL, which would put ${p.name} at $${Math.round(p.tvl_usd * bandMedian / 1e6)}M. The fit says $${Math.round(ctx.implied / 1e6)}M, below that median.`,
+      cost: 'nothing, this is the pricing check before you commit capital',
+      time: '5 minutes',
+    });
+  }
+
+  steps.push({
+    text: `Do one qualifying action every ${ctx.odds >= 0.5 ? 'two' : 'four'} weeks, not a burst at the end: the odds above come from protocols that held positions across several snapshots, and a single late transaction is the pattern most often filtered out.`,
+    cost: `about $${ctx.odds >= 0.5 ? 4 : 2} of gas a month`,
+    time: `10 minutes every ${ctx.odds >= 0.5 ? 'two' : 'four'} weeks`,
+  });
+
+  steps.push({
+    text: `Hold at least ${hold} days. ${ctx.low < capital * 2 ? `The low end of the band is close to the capital at risk, so treat this as a low-conviction position and keep it under a third of the farming budget.` : `The low end of the band still clears the capital at risk by a wide margin, which is what makes the position worth holding.`}`,
+    cost: `the $${capital} stays locked for ${hold} days`,
+    time: `${hold} days`,
+  });
+
+  steps.push({
+    text: `Claim only from a link the protocol publishes itself, and write the wallet, dates and transactions into a log so the position can be repeated or unwound without guessing.`,
+    cost: 'no fee to check, and never pay to claim',
+    time: '10 minutes',
+  });
+
+  return steps;
+}
+
+/** The bucket label the odds table uses, for a step that quotes the base rate. */
+function holdBucket(age: number): string {
+  if (age < 180) return 'under six months old';
+  if (age < 540) return 'six to eighteen months old';
+  if (age < 1095) return 'eighteen to thirty-six months old';
+  return 'over three years old';
+}
+
+/** How much to put at risk: the odds set the size, not a constant. */
+function sizeFor(odds: number, p: SnapshotProtocol): number {
+  const base = odds >= 0.6 ? 250 : odds >= 0.4 ? 150 : odds >= 0.25 ? 100 : 50;
+  // never more than a rounding of 0.02% of the protocol's own TVL
+  return Math.max(25, Math.min(base, Math.round(p.tvl_usd * 0.0002 / 25) * 25));
 }
 
 /** The live-token protocols, by market cap, for the dashboard's Live token view. */
@@ -384,12 +512,19 @@ export function radarRow(row: BoardRow): RadarRow {
     implied_value_usd: row.implied_value_usd,
     growth_multiplier: row.model.growth_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,
+    launch_odds: row.launch_odds,
+    band_low_usd: row.band_low_usd,
+    band_high_usd: row.band_high_usd,
+    farm_steps: row.farm_steps,
+    peers_in_category: row.peers_in_category,
+    category_median_ratio: row.category_median_ratio,
   };
 }
 
 /** Everything the dashboard renders, from the snapshot. */
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
-  const board = buildBoard(snapshot, model);
+  const ctx = modelContext(snapshot);
+  const board = buildBoard(snapshot, model, ctx);
   const live = liveRows(snapshot);
   const early = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
   const radar: RadarData = {
@@ -402,6 +537,24 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     board_size: board.length,
     early_size: early,
     live_size: live.length,
+    curve: {
+      a0: Math.round(ctx.curve.a0 * 1e4) / 1e4,
+      a1: Math.round(ctx.curve.a1 * 1e4) / 1e4,
+      n: ctx.curve.n,
+      r2: Math.round(ctx.curve.r2 * 1e4) / 1e4,
+      power: Math.round(ctx.curve.power * 1e4) / 1e4,
+      q25: Math.round(ctx.curve.q25 * 1e4) / 1e4,
+      q75: Math.round(ctx.curve.q75 * 1e4) / 1e4,
+    },
+    odds: ctx.odds.buckets.map((b, i) => ({
+      label: b.label,
+      lo: b.lo,
+      hi: b.hi,
+      tokenized: b.tokenized,
+      n: b.n,
+      share: Math.round((ctx.odds.shares[i] ?? 0) * 1000) / 1000,
+    })),
+    category_test: ctx.categoryTest,
     rows: board.map(radarRow),
     live,
   };
