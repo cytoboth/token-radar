@@ -9,26 +9,28 @@ Which protocol without a token would be worth the most if it launched. Built for
 
 ## What it does
 
-Reads one sealed DefiLlama snapshot (758 protocols, $5M TVL floor) and ranks 200 of them: the 40 that
-meet the watchlist rule plus 160 pre-token protocols below it. Every row carries an implied value, an
-interquartile band, a launch-odds prior and a farm plan built from that protocol's own record.
+Reads one sealed DefiLlama snapshot (758 protocols, $50M TVL floor) and ranks 200 of them: the 40 that
+meet the watchlist rule plus 160 pre-token protocols below it. Every row carries an implied value, a
+60% band, a launch-odds prior, and a $1,000 farm economics with six concrete steps.
 
 ## The model
 
-The value curve is fitted at run time on the snapshot's own token-bearing protocols:
+The value curve is fitted at run time on the snapshot's own token-bearing protocols, with Huber weights
+so the 400× and 69× ratio outliers cannot bend it:
 
 ```
-ln(mcap / TVL) = 6.9646 − 1.1000 · log₁₀(TVL)
+ln(mcap / TVL) = 6.4668 − 1.0325 · log₁₀(TVL)
 ```
 
-so implied value scales as `TVL^0.522`. A $2.75B protocol is priced at $71M, a $7M one at $2.6M. A flat
-multiple of TVL would overvalue the largest by about 7×.
+so implied value scales as `TVL^0.552`. A $2.75B protocol is priced at $81.8M, a $7M one at about
+$3.8M. Five-fold validation on the 128 peers: held-out median miss ×1.16 against ×1.07 for a flat
+0.2× TVL cap, 47% of held-out values inside ×3 against 36%, and a 60% interval that holds 59% of the
+time. A per-category multiplier was tested on held-out halves and rejected; the folds are printed on
+the page.
 
-A per-category multiplier was tested on two held-out halves and rejected: it cost 0.065 of rank
-correlation (0.458→0.437 and 0.416→0.307). The folds are printed on the page.
-
-Launch odds come from the share of same-age protocols that already record a token — 2% under six
-months, 28% past three years — and are shown beside the value rather than folded into it.
+Launch odds come from the share of same-age protocols that already record a token and are shown beside
+the value rather than folded into it. Each row's farm economics models a $1,000 ticket: a 13% airdrop
+slice, gas, fees, time, net, break-even drop share, exit trigger and the steps to execute.
 
 ## Run it
 

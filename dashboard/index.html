@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Radar — pre-token protocols ranked by implied value</title>
+<title>Launch Radar — pre-token protocols, valued from their own record</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
@@ -11,65 +11,78 @@
 
 <header class="masthead">
   <div class="brand">
-    <h1>Token Radar</h1>
-    <p class="tagline">Which protocol without a token would be worth the most if it launched</p>
+    <div class="mark" aria-hidden="true"><span></span><span></span><span></span></div>
+    <div>
+      <h1>Launch Radar</h1>
+      <p class="tagline">Pre-token protocols, valued from their own record.</p>
+    </div>
   </div>
-  <dl class="kpis" id="kpis"></dl>
+  <div class="chips" id="chips"></div>
 </header>
 
-<section class="model" id="model" aria-label="The model"></section>
+<section class="kpis" id="kpis" aria-label="Headline measures"></section>
 
-<section class="controls" aria-label="Filters">
-  <label class="field">
-    <span>Search</span>
-    <input id="q" type="search" placeholder="name, symbol, slug" autocomplete="off">
-  </label>
-  <label class="field">
-    <span>Category</span>
-    <select id="category"><option value="">All categories</option></select>
-  </label>
-  <label class="field">
-    <span>Chain</span>
-    <select id="chain"><option value="">All chains</option></select>
-  </label>
-  <label class="field">
-    <span>Min launch odds</span>
-    <select id="odds">
-      <option value="0">Any</option>
-      <option value="0.25">25% +</option>
-      <option value="0.4">40% +</option>
-      <option value="0.6">60% +</option>
-    </select>
-  </label>
-  <label class="field">
-    <span>Sort</span>
-    <select id="sort">
-      <option value="rank">Implied value</option>
-      <option value="odds">Launch odds</option>
-      <option value="tvl">TVL</option>
-      <option value="growth">7d growth</option>
-      <option value="age">Age</option>
-    </select>
-  </label>
-  <p class="count" id="count"></p>
+<section class="panels">
+  <article class="panel accounting">
+    <h2>Every protocol in the snapshot is accounted for</h2>
+    <p class="lede">The sealed snapshot holds 758 protocols. The radar ranks the pre-token ones, prices the token-bearing ones as peers, and sets the rest aside for a stated reason.</p>
+    <div id="accounting"></div>
+  </article>
+
+  <article class="panel model">
+    <h2>How a launch is priced</h2>
+    <div id="model"></div>
+  </article>
+
+  <article class="panel validation">
+    <h2>Out-of-sample evidence</h2>
+    <p class="lede">Five folds over the 128 token-bearing peers. Each fold fits the curve on the other four and prices the held-out protocols with the same growth and maturity terms the board uses.</p>
+    <div id="validation"></div>
+  </article>
+</section>
+
+<section class="scatter" aria-label="Market cap against TVL">
+  <div class="scatter-head">
+    <h2>Market cap against TVL, log-log</h2>
+    <p><span class="dot peer"></span>128 token-bearing peers <span class="dot board"></span>the board's top 12 at their implied value</p>
+  </div>
+  <div id="scatter"></div>
 </section>
 
 <main id="board" tabindex="-1">
-  <table class="board">
-    <thead>
-      <tr>
-        <th class="num">#</th>
-        <th>Protocol</th>
-        <th class="num">TVL</th>
-        <th class="num">7d</th>
-        <th class="num">Age</th>
-        <th class="num">Implied value</th>
-        <th class="band">Interquartile band</th>
-        <th class="num">Launch odds</th>
-      </tr>
-    </thead>
-    <tbody id="rows"></tbody>
-  </table>
+  <div class="board-head">
+    <div>
+      <h2>No token yet, ranked by implied value</h2>
+      <p class="lede" id="count"></p>
+    </div>
+    <div class="controls" aria-label="Filters">
+      <label><span>Search</span><input id="q" type="search" placeholder="name, symbol, slug" autocomplete="off"></label>
+      <label><span>Category</span><select id="category"><option value="">All categories</option></select></label>
+      <label><span>Chain</span><select id="chain"><option value="">All chains</option></select></label>
+      <label><span>Verdict</span><select id="verdict"><option value="">All verdicts</option><option value="FARM">FARM</option><option value="THIN">THIN</option><option value="SKIP">SKIP</option></select></label>
+      <label><span>Sort</span><select id="sort"><option value="rank">Implied value</option><option value="odds">Launch odds</option><option value="net">Net farm value</option><option value="tvl">TVL</option><option value="growth">7d growth</option><option value="age">Age</option></select></label>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="board">
+      <thead>
+        <tr>
+          <th class="num">#</th>
+          <th>Protocol</th>
+          <th class="num">TVL</th>
+          <th class="num">7d</th>
+          <th class="num">Age</th>
+          <th class="num">Implied value</th>
+          <th class="band">60% range</th>
+          <th class="num">Launch odds</th>
+          <th>Verdict</th>
+          <th class="num">Net farm</th>
+          <th>Farm plan</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
   <p class="empty" id="empty" hidden>No protocol matches these filters.</p>
 </main>
 
@@ -79,20 +92,16 @@
   <section>
     <h2>Where the numbers come from</h2>
     <p id="provenance"></p>
-    <p>Every figure on this page is computed from that snapshot alone. No external call, no cached list, no
-      hand-set multiple per protocol: one fit, applied to every row.</p>
+    <p>Every figure on this page is computed from the sealed snapshot alone. No external call, no cached list, no hand-set multiple per protocol: one robust fit, applied to every row.</p>
   </section>
   <section>
     <h2>Launch odds</h2>
-    <p>The share of protocols of the same age that already record a token, counted in the snapshot and
-      smoothed by one to two so thin buckets cannot claim certainty. It is a cross-sectional rate, not a
-      forecast, and it is shown beside the value rather than folded into it.</p>
+    <p>The share of protocols of the same age that already record a token, fitted as a logistic curve on the snapshot's own records. It is a cross-sectional rate, not a forecast.</p>
     <table class="mini" id="odds-table"></table>
   </section>
   <section>
-    <h2>What was tested and rejected</h2>
-    <p>The value curve was fitted with and without a per-category term and scored on held-out halves. The
-      category term is only applied when it wins; the folds are printed below so the decision can be checked.</p>
+    <h2>Tested and rejected</h2>
+    <p>The value curve was fitted with and without a per-category term and scored on held-out halves. The category term is only applied when it wins; the folds are printed below so the decision can be checked.</p>
     <table class="mini" id="folds"></table>
   </section>
 </footer>

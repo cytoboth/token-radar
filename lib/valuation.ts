@@ -50,6 +50,13 @@ export function peersOf(protocols: SnapshotProtocol[]): Peer[] {
   return out;
 }
 
+/** Median absolute value. */
+function medianAbs(values: number[]): number {
+  const s = values.map((v) => Math.abs(v)).sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 === 1 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
+}
+
 /** Quantile of an ascending-sorted array, by linear interpolation. */
 function quantile(sorted: number[], q: number): number {
   if (sorted.length === 0) return 0;
@@ -58,6 +65,87 @@ function quantile(sorted: number[], q: number): number {
   const hi = Math.ceil(at);
   if (lo === hi) return sorted[lo]!;
   return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (at - lo);
+}
+
+/**
+ * Robust least squares of ln(ratio) on log10(TVL), Huber weights. The snapshot's ratio has
+ * extreme outliers (a prediction market at 400x, a CEX at 69x); an ordinary fit lets them
+ * bend the curve. The robust fit is the one the board prices with.
+ */
+export function fitCurveRobust(peers: Peer[]): Curve {
+  const usable = peers.filter((p) => p.tvl > 0 && p.ratio > 0);
+  const n = usable.length;
+  if (n < 12) {
+    const a0 = Math.log(0.2);
+    return {
+      a0, a1: 0, n, r2: 0, q10: -1, q25: -0.7, q75: 0.7, q90: 1,
+      power: 1, at: (tvl: number) => Math.exp(a0) * tvl,
+    };
+  }
+  const xs = usable.map((p) => Math.log10(p.tvl));
+  const ys = usable.map((p) => Math.log(p.ratio));
+  let a0 = 0;
+  let a1 = 0;
+  let w = new Array<number>(n).fill(1);
+  for (let iter = 0; iter < 60; iter++) {
+    let sw = 0;
+    let sx = 0;
+    let sy = 0;
+    for (let i = 0; i < n; i++) {
+      sw += w[i]!;
+      sx += w[i]! * xs[i]!;
+      sy += w[i]! * ys[i]!;
+    }
+    const mx = sx / sw;
+    const my = sy / sw;
+    let sxx = 0;
+    let sxy = 0;
+    for (let i = 0; i < n; i++) {
+      sxx += w[i]! * (xs[i]! - mx) ** 2;
+      sxy += w[i]! * (xs[i]! - mx) * (ys[i]! - my);
+    }
+    if (sxx <= 0) break;
+    a1 = sxy / sxx;
+    a0 = my - a1 * mx;
+    const res = ys.map((y, i) => y - (a0 + a1 * xs[i]!));
+    const scale = 1.4826 * medianAbs(res) || 1;
+    let changed = 0;
+    for (let i = 0; i < n; i++) {
+      const r = Math.abs(res[i]!);
+      const next = r <= 1.345 * scale ? 1 : (1.345 * scale) / r;
+      if (Math.abs(next - w[i]!) > 1e-6) changed++;
+      w[i] = next;
+    }
+    if (changed === 0) break;
+  }
+
+  const resid: number[] = [];
+  let ssRes = 0;
+  for (let i = 0; i < n; i++) {
+    const r = ys[i]! - (a0 + a1 * xs[i]!);
+    resid.push(r);
+    ssRes += r * r;
+  }
+  const meanY = ys.reduce((s, v) => s + v, 0) / n;
+  let ssTot = 0;
+  for (let i = 0; i < n; i++) {
+    const d = ys[i]! - meanY;
+    ssTot += d * d;
+  }
+  resid.sort((a, b) => a - b);
+
+  return {
+    a0,
+    a1,
+    n,
+    r2: ssTot > 0 ? 1 - ssRes / ssTot : 0,
+    q10: quantile(resid, 0.1),
+    q25: quantile(resid, 0.25),
+    q75: quantile(resid, 0.75),
+    q90: quantile(resid, 0.9),
+    power: 1 + a1 / LN10,
+    at: (tvl: number) => Math.exp(a0 + a1 * Math.log10(Math.max(1, tvl))),
+  };
 }
 
 /**
@@ -289,7 +377,7 @@ function rankOf(values: number[]): number[] {
   return ranks;
 }
 
-function spearman(a: number[], b: number[]): number {
+export function spearman(a: number[], b: number[]): number {
   const ra = rankOf(a);
   const rb = rankOf(b);
   const n = a.length;

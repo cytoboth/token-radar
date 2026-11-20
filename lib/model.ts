@@ -19,7 +19,7 @@
 // protocol name is ever special-cased: the same function scores every row.
 
 import {
-  band, categoryContext, curveValue, fitCurve, fitOdds, peersOf, sizeContext, testCategory,
+  band, categoryContext, curveValue, fitCurve, fitCurveRobust, fitOdds, peersOf, sizeContext, spearman, testCategory,
   type CategoryContext, type CategoryTest, type Curve, type OddsModel, type SizeContext,
 } from './valuation.ts';
 
@@ -84,7 +84,38 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-1';
+export const MODEL_VERSION = 'radar-2';
+
+/** A protocol's farm economics: what a $1,000 ticket is expected to return, net of costs. */
+export interface FarmEconomics {
+  verdict: 'FARM' | 'THIN' | 'SKIP';
+  deposit: number;
+  hold_days: number;
+  drop_share: number;
+  expected_drop: number;
+  gas_cost: number;
+  opportunity_cost: number;
+  time_cost: number;
+  total_cost: number;
+  net: number;
+  break_even_drop_share: number;
+  hours: number;
+  per_hour: number;
+  exit_trigger: string;
+}
+
+/** The model's out-of-sample validation, computed on the snapshot's own token-bearing peers. */
+export interface ModelValidation {
+  n: number;
+  rho: number;
+  median_miss: number;
+  within_3: number;
+  band_60: number;
+  flat_median_miss: number;
+  flat_within_3: number;
+  brier: number;
+  brier_base: number;
+}
 
 /** How many pre-token protocols below the watchlist floor the early radar carries, by TVL. */
 export const EARLY_ROWS = 160;
@@ -123,6 +154,7 @@ export interface BoardRow {
     age_days: number | null;
   };
   farm_steps: string[];
+  farm: FarmEconomics;
   /** the share of same-age protocols that already record a token: a cross-sectional prior */
   launch_odds: number;
   /** the fitted value's interquartile band, same curve, residual quantiles applied */
@@ -152,6 +184,7 @@ export interface RadarRow {
   band_low_usd: number;
   band_high_usd: number;
   farm_steps: string[];
+  farm: FarmEconomics;
   peers_in_category: number;
   category_median_ratio: number | null;
 }
@@ -188,6 +221,17 @@ export interface RadarData {
   peers: { tvl: number; mcap: number }[];
   /** the category term's held-out test: kept only when it beats the size-only fit */
   category_test: CategoryTest;
+  /** the model's out-of-sample validation on the snapshot's token-bearing peers */
+  validation: ModelValidation;
+  /** the whole snapshot's accounting: every protocol is either ranked, a peer, or set aside */
+  accounting: {
+    total: number;
+    peers: number;
+    token_record: number;
+    watchlist: number;
+    early: number;
+    set_aside: number;
+  };
   rows: RadarRow[];
   live: LiveRow[];
 }
@@ -229,6 +273,130 @@ export function impliedValue(protocol: SnapshotProtocol, asOf: string, model: Mo
   return { implied, growthPct, growthMult, maturityMult, age };
 }
 
+/** Median of an array. */
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const s = [...values].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 === 1 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
+}
+
+/** Quantile of an ascending-sorted array. */
+function quantile(sorted: number[], q: number): number {
+  if (sorted.length === 0) return 0;
+  const at = (sorted.length - 1) * q;
+  const lo = Math.floor(at);
+  const hi = Math.ceil(at);
+  if (lo === hi) return sorted[lo]!;
+  return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (at - lo);
+}
+
+/** Dollar formatting for the farm economics. */
+function money(n: number): string {
+  const a = Math.abs(n);
+  if (a >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
+  if (a >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
+  if (a >= 1e3) return `$${(n / 1e3).toFixed(0)}K`;
+  return `$${Math.round(n)}`;
+}
+
+/**
+ * The model's out-of-sample validation. Five folds over the snapshot's token-bearing peers;
+ * each fold fits the robust curve on the other four and prices the held-out peers with the
+ * same growth and maturity terms the board uses. The flat-cap baseline is a constant 0.2x TVL.
+ */
+export function validateModel(snapshot: Snapshot, model: ModelConstants): ModelValidation {
+  const peers = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.tvl_usd > 0 && p.mcap_usd > 0);
+  const sorted = [...peers].sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+  const folds: SnapshotProtocol[][] = [[], [], [], [], []];
+  sorted.forEach((p, i) => folds[i % 5]!.push(p));
+  const preds: number[] = [];
+  const actual: number[] = [];
+  const peerTvl: number[] = [];
+  const residuals: number[] = [];
+  for (let f = 0; f < 5; f++) {
+    const test = folds[f]!;
+    const train = folds.flatMap((g, i) => (i === f ? [] : g));
+    const curve = fitCurveRobust(peersOf(train));
+    for (const p of test) {
+      const { implied } = impliedValue(p, snapshot.as_of, model, curve);
+      preds.push(implied);
+      actual.push(p.mcap_usd!);
+      peerTvl.push(p.tvl_usd);
+      residuals.push(Math.log(p.mcap_usd! / Math.max(1, implied)));
+    }
+  }
+  const ratios = actual.map((a, i) => a / Math.max(1, preds[i]!));
+  const sortedRes = [...residuals].sort((a, b) => a - b);
+  const lo = quantile(sortedRes, 0.2);
+  const hi = quantile(sortedRes, 0.8);
+  const flat = actual.map((a, i) => a / Math.max(1, 0.2 * peerTvl[i]!));
+  const odds = fitOdds(snapshot.protocols, snapshot.as_of);
+  const withAge = snapshot.protocols.filter((p) => p.listed_at !== null);
+  const ys = withAge.map((p) => (p.gecko_id !== null || p.symbol !== null ? 1 : 0));
+  const ps = withAge.map((p) => odds.at(ageDays(snapshot.as_of, p.listed_at)));
+  let brier = 0;
+  for (let i = 0; i < ys.length; i++) brier += (ps[i]! - ys[i]!) ** 2;
+  brier /= Math.max(1, ys.length);
+  let base = 0;
+  for (const y of ys) base += y;
+  base /= Math.max(1, ys.length);
+  let brierBase = 0;
+  for (const y of ys) brierBase += (base - y) ** 2;
+  brierBase /= Math.max(1, ys.length);
+  return {
+    n: peers.length,
+    rho: Math.round(spearman(preds, actual) * 1000) / 1000,
+    median_miss: Math.round(median(ratios) * 100) / 100,
+    within_3: Math.round((ratios.filter((r) => r >= 1 / 3 && r <= 3).length / ratios.length) * 100) / 100,
+    band_60: Math.round((residuals.filter((r) => r >= lo && r <= hi).length / residuals.length) * 100) / 100,
+    flat_median_miss: Math.round(median(flat) * 100) / 100,
+    flat_within_3: Math.round((flat.filter((r) => r >= 1 / 3 && r <= 3).length / flat.length) * 100) / 100,
+    brier: Math.round(brier * 1000) / 1000,
+    brier_base: Math.round(brierBase * 1000) / 1000,
+  };
+}
+
+/** One protocol's farm economics under a $1,000 ticket. */
+export function farmEconomics(
+  p: SnapshotProtocol,
+  age: number | null,
+  odds: number,
+  implied: number,
+  tvl: number,
+): FarmEconomics {
+  const deposit = 1000;
+  const hold = holdDaysFor(age);
+  const dropShare = 0.13;
+  const expectedDrop = deposit * dropShare * odds;
+  const gas = 8 + 2 * (hold / 30);
+  const opportunity = deposit * 0.04 * (hold / 365);
+  const hours = 1.25 + (hold / 30) * 0.5;
+  const timeCost = hours * 20;
+  const totalCost = gas + opportunity + timeCost;
+  const net = expectedDrop - totalCost;
+  const breakEven = totalCost / Math.max(0.01, deposit * odds);
+  const perHour = net / hours;
+  const verdict: FarmEconomics['verdict'] = net >= 20 && odds >= 0.35 ? 'FARM' : net > 0 ? 'THIN' : 'SKIP';
+  const exitTrigger = `TVL below ${money(tvl * 0.83)} (-17%) or withdrawals paused`;
+  return {
+    verdict,
+    deposit,
+    hold_days: hold,
+    drop_share: dropShare,
+    expected_drop: Math.round(expectedDrop * 100) / 100,
+    gas_cost: Math.round(gas * 100) / 100,
+    opportunity_cost: Math.round(opportunity * 100) / 100,
+    time_cost: Math.round(timeCost * 100) / 100,
+    total_cost: Math.round(totalCost * 100) / 100,
+    net: Math.round(net * 100) / 100,
+    break_even_drop_share: Math.round(breakEven * 1000) / 1000,
+    hours: Math.round(hours * 100) / 100,
+    per_hour: Math.round(perHour * 100) / 100,
+    exit_trigger: exitTrigger,
+  };
+}
+
 /** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
 const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
 
@@ -267,7 +435,7 @@ export interface ModelContext {
 export function modelContext(snapshot: Snapshot): ModelContext {
   const peers = peersOf(snapshot.protocols);
   return {
-    curve: fitCurve(peers),
+    curve: fitCurveRobust(peers),
     peers,
     odds: fitOdds(snapshot.protocols, snapshot.as_of),
     categoryTest: testCategory(peers),
@@ -298,7 +466,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, ct
     const b = band(implied, context.curve);
     const cat: CategoryContext = categoryContext(p, context.peers);
     const size: SizeContext = sizeContext(p.tvl_usd, context.peers);
-    return { p, implied, growthPct, growthMult, maturityMult, age, band: b, cat, size, odds: context.odds.at(age) };
+    return { p, implied, growthPct, growthMult, maturityMult, age, band: b, cat, size, odds: context.odds.at(age), farm: farmEconomics(p, age, context.odds.at(age), implied, p.tvl_usd) };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   return scored.map((s, i) => ({
@@ -333,7 +501,9 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, ct
       sizeLabel: s.size.label,
       sizePeers: s.size.n,
       sizeMedianRatio: s.size.median_ratio,
+      farm: s.farm,
     }).map(stepText),
+    farm: s.farm,
     launch_odds: Math.round(s.odds * 1000) / 1000,
     band_low_usd: s.band.low,
     band_high_usd: s.band.high,
@@ -399,18 +569,18 @@ export function farmSteps(
   age: number | null,
   ctx: {
     low: number; high: number; implied: number; odds: number; peers: number; medianRatio: number | null;
-    sizeLabel: string; sizePeers: number; sizeMedianRatio: number | null;
+    sizeLabel: string; sizePeers: number; sizeMedianRatio: number | null; farm: FarmEconomics;
   },
 ): FarmStep[] {
   const chain = chainOf(p);
-  const capital = sizeFor(ctx.odds, p);
-  const hold = holdDaysFor(age);
+  const capital = ctx.farm.deposit;
+  const hold = ctx.farm.hold_days;
   const action = actionFor(p, capital, chain);
   const perTvl = ctx.implied / Math.max(1, p.tvl_usd);
   const steps: FarmStep[] = [
     {
-      text: `${action} Size it at $${capital}: ${(ctx.odds * 100).toFixed(0)}% of ${age === null ? 'protocols this age' : `protocols ${holdBucket(age)}`} record a token, so budget for no airdrop at all.`,
-      cost: `$${capital} of capital, about $${capital >= 150 ? 8 : 4} in gas`,
+      text: `${action} Size it at $${capital}: a $1,000 ticket is modelled to return $${ctx.farm.expected_drop.toFixed(2)} if the token launches (${(ctx.odds * 100).toFixed(0)}% odds), against $${ctx.farm.total_cost.toFixed(2)} of gas, fees and time. Verdict: ${ctx.farm.verdict}.`,
+      cost: `$${capital} of capital, about $${ctx.farm.gas_cost.toFixed(0)} in gas`,
       time: '15 minutes to set up',
     },
   ];
@@ -448,19 +618,19 @@ export function farmSteps(
   }
 
   steps.push({
-    text: `Do one qualifying action every ${ctx.odds >= 0.5 ? 'two' : 'four'} weeks, not a burst at the end: the odds above come from protocols that held positions across several snapshots, and a single late transaction is the pattern most often filtered out.`,
+    text: `Do one qualifying action every ${ctx.odds >= 0.5 ? 'two' : 'four'} weeks, not a burst at the end: the odds above come from protocols that held positions across several snapshots, and a single late transaction is the pattern most often filtered out. Break-even needs a drop share above ${(ctx.farm.break_even_drop_share * 100).toFixed(1)}% of the $1,000 ticket.`,
     cost: `about $${ctx.odds >= 0.5 ? 4 : 2} of gas a month`,
     time: `10 minutes every ${ctx.odds >= 0.5 ? 'two' : 'four'} weeks`,
   });
 
   steps.push({
-    text: `Hold at least ${hold} days. ${ctx.low < capital * 2 ? `The low end of the band is close to the capital at risk, so treat this as a low-conviction position and keep it under a third of the farming budget.` : `The low end of the band still clears the capital at risk by a wide margin, which is what makes the position worth holding.`}`,
+    text: `Hold at least ${hold} days. The modelled net is $${ctx.farm.net} after $${ctx.farm.total_cost} of gas, fees and time, so the position is ${ctx.farm.verdict}. Exit if ${ctx.farm.exit_trigger}.`,
     cost: `the $${capital} stays locked for ${hold} days`,
     time: `${hold} days`,
   });
 
   steps.push({
-    text: `Claim only from a link the protocol publishes itself, and write the wallet, dates and transactions into a log so the position can be repeated or unwound without guessing.`,
+    text: `Claim only from a link the protocol publishes itself, and write the wallet, dates and transactions into a log so the position can be repeated or unwound without guessing. The modelled hourly margin is $${ctx.farm.per_hour} over ${ctx.farm.hours} hours of work.`,
     cost: 'no fee to check, and never pay to claim',
     time: '10 minutes',
   });
@@ -474,13 +644,6 @@ function holdBucket(age: number): string {
   if (age < 540) return 'six to eighteen months old';
   if (age < 1095) return 'eighteen to thirty-six months old';
   return 'over three years old';
-}
-
-/** How much to put at risk: the odds set the size, not a constant. */
-function sizeFor(odds: number, p: SnapshotProtocol): number {
-  const base = odds >= 0.6 ? 250 : odds >= 0.4 ? 150 : odds >= 0.25 ? 100 : 50;
-  // never more than a rounding of 0.02% of the protocol's own TVL
-  return Math.max(25, Math.min(base, Math.round(p.tvl_usd * 0.0002 / 25) * 25));
 }
 
 /** The live-token protocols, by market cap, for the dashboard's Live token view. */
@@ -520,6 +683,7 @@ export function radarRow(row: BoardRow): RadarRow {
     band_low_usd: row.band_low_usd,
     band_high_usd: row.band_high_usd,
     farm_steps: row.farm_steps,
+    farm: row.farm,
     peers_in_category: row.peers_in_category,
     category_median_ratio: row.category_median_ratio,
   };
@@ -559,6 +723,15 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
       share: Math.round((ctx.odds.shares[i] ?? 0) * 1000) / 1000,
     })),
     category_test: ctx.categoryTest,
+    validation: validateModel(snapshot, model),
+    accounting: {
+      total: snapshot.protocols.length,
+      peers: ctx.peers.length,
+      token_record: snapshot.protocols.filter((p) => p.mcap_usd === null && (p.gecko_id !== null || p.symbol !== null)).length,
+      watchlist: snapshot.watchlist.length,
+      early,
+      set_aside: snapshot.protocols.length - ctx.peers.length - snapshot.protocols.filter((p) => p.mcap_usd === null && (p.gecko_id !== null || p.symbol !== null)).length - board.length,
+    },
     odds_fit: { b0: ctx.odds.b0, b1: ctx.odds.b1, n: ctx.odds.n },
     peers: ctx.peers.map((p) => ({ tvl: Math.round(p.tvl), mcap: Math.round(p.mcap) })),
     rows: board.map(radarRow),
