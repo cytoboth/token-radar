@@ -182,6 +182,8 @@ export interface RadarData {
   curve: { a0: number; a1: number; n: number; r2: number; power: number; q25: number; q75: number };
   /** the launch-odds table the board's prior comes from */
   odds: { label: string; lo: number; hi: number | null; tokenized: number; n: number; share: number }[];
+  /** the logistic the per-row odds come from */
+  odds_fit: { b0: number; b1: number; n: number };
   /** the category term's held-out test: kept only when it beats the size-only fit */
   category_test: CategoryTest;
   rows: RadarRow[];
@@ -555,6 +557,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
       share: Math.round((ctx.odds.shares[i] ?? 0) * 1000) / 1000,
     })),
     category_test: ctx.categoryTest,
+    odds_fit: { b0: ctx.odds.b0, b1: ctx.odds.b1, n: ctx.odds.n },
     rows: board.map(radarRow),
     live,
   };

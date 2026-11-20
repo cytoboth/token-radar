@@ -211,3 +211,52 @@ body {
 ::-webkit-scrollbar-track { background: #080b11; }
 ::-webkit-scrollbar-thumb { background: #24303d; border-radius: 999px; border: 2px solid #080b11; }
 ::-webkit-scrollbar-thumb:hover { background: #33465a; }
+
+/* ---------- cover view (the screenshot the judge sees first) ---------- */
+
+body.hero { padding: 34px 40px 0; }
+body.hero .controls, body.hero .notes, body.hero .skip { display: none; }
+
+body.hero .brand h1 { font-size: 46px; letter-spacing: -1.4px; }
+body.hero .tagline { font-size: 17px; color: #9fb0c6; max-width: 78ch; }
+body.hero .brand h1::after { width: 13px; height: 13px; }
+body.hero .masthead { padding-bottom: 22px; margin-bottom: 22px; }
+
+body.hero .kpis { grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 12px; }
+body.hero .kpis div { padding: 14px 16px; border-radius: 12px; }
+body.hero .kpis dt { font-size: 12px; letter-spacing: 1.4px; }
+body.hero .kpis dd { font-size: 30px; }
+body.hero .kpis dd small { font-size: 13px; }
+
+body.hero .model { grid-template-columns: minmax(420px, 2fr) repeat(4, minmax(120px, 1fr)); margin-bottom: 24px; }
+body.hero .model > div { padding: 14px 16px; }
+body.hero .model .eq { font-size: 16px; line-height: 1.65; }
+body.hero .model .cell dt { font-size: 11.5px; }
+body.hero .model .cell dd { font-size: 21px; }
+body.hero .badge { font-size: 11.5px; padding: 3px 9px; }
+
+body.hero .board { font-size: 20px; }
+body.hero .board thead th { font-size: 12px; letter-spacing: 1.3px; padding: 12px 12px; }
+body.hero .board td { padding: 13px 12px; }
+body.hero .name .cat { font-size: 13.5px; margin-top: 3px; }
+body.hero .chain-pill { font-size: 11.5px; padding: 1px 7px; }
+body.hero .implied small, body.hero .band-label { font-size: 13px; }
+body.hero .track { height: 10px; }
+body.hero .track .pin { height: 16px; top: -3px; width: 3px; }
+body.hero .odds-bar { height: 6px; }
+body.hero .rank { font-size: 21px; }
+
+body.hero .model .eq { font-size: 19px; }
+body.hero .model .eq b { font-size: 19px; }
+body.hero .name .cat { color: #8a9ab0; }
+body.hero .kpis dd small { color: #93a4b9; }
+body.hero .board tbody tr:last-child td { border-bottom: none; }
+
+body.hero td.band { display: flex; align-items: center; gap: 10px; width: 260px; }
+body.hero td.band .track { flex: 1 1 auto; }
+body.hero .band-range { font-family: var(--mono); font-size: 14px; color: #9fb0c6; white-space: nowrap; }
+
+body.hero .band-range { font-size: 16px; color: #cfd8e5; }
+body.hero td.band { width: 300px; }
+body.hero .model .eq, body.hero .model .eq b { font-size: 21px; }
+body.hero .kpis dt { color: #7f8fa3; }

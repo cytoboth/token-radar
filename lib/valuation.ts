@@ -128,14 +128,22 @@ export function band(value: number, curve: Curve): { low: number; high: number }
 }
 
 /**
- * Launch odds: the share of protocols of a given age that already record a token, estimated
- * cross-sectionally from the snapshot and smoothed. A cross-sectional rate, not a forecast.
+ * Launch odds. The share of protocols of a given age that already record a token, fitted as a
+ * logistic curve on the snapshot's own records so the prior moves smoothly with age instead of
+ * snapping between buckets:
+ *   P(token) = 1 / (1 + exp(-(b0 + b1 * ln(age + 1))))
+ * It is a cross-sectional rate, not a forecast.
  */
 export interface OddsModel {
   /** ascending bucket edges in days, the last open-ended */
   edges: number[];
-  /** smoothed share per bucket */
+  /** smoothed share per bucket, for the table on the page */
   shares: number[];
+  /** logistic coefficients, for the page's method note */
+  b0: number;
+  b1: number;
+  /** records the fit used */
+  n: number;
   /** share for an age in days */
   at: (ageDays: number | null) => number;
   /** the buckets and their raw counts, for the page */
@@ -167,16 +175,45 @@ export function fitOdds(protocols: SnapshotProtocol[], asOf: string): OddsModel 
   // Laplace smoothing: a bucket with few records must not claim certainty.
   const shares = buckets.map((b) => (b.tokenized + 1) / (b.n + 2));
 
+  // Logistic fit of token presence on ln(age+1), by Newton steps on the log-likelihood.
+  let b0 = -3;
+  let b1 = 0.5;
+  if (withAge.length >= 20) {
+    for (let step = 0; step < 25; step++) {
+      let g0 = 0, g1 = 0, h00 = 0, h01 = 0, h11 = 0;
+      for (const r of withAge) {
+        const x = Math.log(r.age + 1);
+        const y = r.hasToken ? 1 : 0;
+        const z = b0 + b1 * x;
+        const p = 1 / (1 + Math.exp(-z));
+        const w = Math.max(1e-9, p * (1 - p));
+        g0 += y - p;
+        g1 += (y - p) * x;
+        h00 -= w;
+        h01 -= w * x;
+        h11 -= w * x * x;
+      }
+      const det = h00 * h11 - h01 * h01;
+      if (Math.abs(det) < 1e-12) break;
+      const d0 = (-g0 * h11 + g1 * h01) / det;
+      const d1 = (-g1 * h00 + g0 * h01) / det;
+      b0 += d0;
+      b1 += d1;
+      if (Math.abs(d0) + Math.abs(d1) < 1e-8) break;
+    }
+  }
+
+  const logistic = (age: number): number => 1 / (1 + Math.exp(-(b0 + b1 * Math.log(Math.max(0, age) + 1))));
+
   return {
     edges: BUCKETS.map((b) => b.lo),
     shares,
+    b0: Math.round(b0 * 1e4) / 1e4,
+    b1: Math.round(b1 * 1e4) / 1e4,
+    n: withAge.length,
     at: (age: number | null) => {
-      if (age === null) return shares[0]!;
-      for (let i = 0; i < BUCKETS.length; i++) {
-        const b = BUCKETS[i]!;
-        if (age >= b.lo && (b.hi === null || age < b.hi)) return shares[i]!;
-      }
-      return shares[shares.length - 1]!;
+      if (age === null) return logistic(365);
+      return Math.min(0.98, Math.max(0.01, logistic(age)));
     },
     buckets,
   };
